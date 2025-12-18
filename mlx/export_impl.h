@@ -89,7 +89,9 @@ struct ImportedFunction {
 
  private:
   ImportedFunction(const std::string& file);
+  ImportedFunction(std::shared_ptr<io::Reader> reader);
   friend ImportedFunction import_function(const std::string&);
+  friend ImportedFunction import_function(std::shared_ptr<io::Reader>);
   ImportedFunction();
 
   std::shared_ptr<FunctionTable> ftable;

@@ -29,7 +29,7 @@ namespace mlx::core {
 
 using namespace mlx::core::fast;
 
-using Reader = io::ParallelFileReader;
+using Reader = io::Reader;
 using Writer = io::FileWriter;
 
 struct PrimitiveSerializer {
@@ -1020,12 +1020,123 @@ ImportedFunction import_function(const std::string& file) {
   return ImportedFunction{file};
 }
 
+ImportedFunction import_function(std::shared_ptr<io::Reader> reader) {
+  return ImportedFunction{std::move(reader)};
+}
+
 ImportedFunction::ImportedFunction(const std::string& file)
     : ftable(std::make_shared<FunctionTable>()) {
-  auto is_ptr = std::make_shared<Reader>(file);
+  auto is_ptr = std::make_shared<io::ParallelFileReader>(file);
   auto& is = *is_ptr;
   if (!is.is_open()) {
     throw std::runtime_error("[import_function] Failed to open " + file);
+  }
+
+  // Parse header
+  auto mlx_version = deserialize<std::string>(is);
+  auto function_count = deserialize<int>(is);
+  ftable->shapeless = deserialize<bool>(is);
+  std::unordered_map<std::uintptr_t, array> constants;
+
+  auto import_one = [&]() {
+    auto kwarg_keys = deserialize<std::vector<std::string>>(is);
+
+    std::unordered_map<uint64_t, array> array_map;
+    auto trace_input_ids = deserialize<std::vector<uint64_t>>(is);
+    auto trace_inputs = deserialize<std::vector<array>>(is);
+    for (int i = 0; i < trace_inputs.size(); ++i) {
+      array_map.emplace(trace_input_ids[i], trace_inputs[i]);
+    }
+    auto trace_output_ids = deserialize<std::vector<uint64_t>>(is);
+
+    std::vector<array> tape;
+    auto tape_size = deserialize<uint64_t>(is);
+    tape.reserve(tape_size);
+
+    auto factory = PrimitiveFactory();
+    for (size_t i = 0; i < tape_size; ++i) {
+      auto id = deserialize<uint64_t>(is);
+      if (deserialize<bool>(is)) {
+        auto input_ids = deserialize<std::vector<uint64_t>>(is);
+        std::vector<array> inputs;
+        inputs.reserve(input_ids.size());
+        for (auto id : input_ids) {
+          inputs.push_back(array_map.at(id));
+        }
+        std::shared_ptr<Primitive> prim = factory.load(is);
+        auto num_siblings = deserialize<uint64_t>(is);
+        if (num_siblings == 0) {
+          auto shape = deserialize<Shape>(is);
+          auto type = deserialize<Dtype>(is);
+          tape.emplace_back(
+              std::move(shape), type, std::move(prim), std::move(inputs));
+          array_map.emplace(id, tape.back());
+        } else {
+          auto ids = deserialize<std::vector<uint64_t>>(is);
+          auto shapes = deserialize<std::vector<Shape>>(is);
+          auto types = deserialize<std::vector<Dtype>>(is);
+          auto arrays = array::make_arrays(
+              std::move(shapes),
+              std::move(types),
+              std::move(prim),
+              std::move(inputs));
+          for (int i = 0; i < arrays.size(); ++i) {
+            auto sid = ids[i];
+            if (sid == id) {
+              tape.push_back(arrays[i]);
+            }
+            array_map.emplace(sid, arrays[i]);
+          }
+        }
+      } else {
+        if (deserialize<bool>(is)) {
+          // Load constant
+          if (auto it = constants.find(id); it != constants.end()) {
+            tape.push_back(it->second);
+          } else {
+            auto shape = deserialize<Shape>(is);
+            auto type = deserialize<Dtype>(is);
+            size_t offset = is.tell();
+            tape.push_back(array(
+                std::move(shape),
+                type,
+                std::make_shared<Load>(
+                    default_stream(Device::cpu), is_ptr, offset),
+                {}));
+            is.seek(offset + tape.back().nbytes());
+            constants.insert({id, tape.back()});
+          }
+          array_map.emplace(id, tape.back());
+        } else {
+          // Function inputs are in the map
+          tape.push_back(array_map.at(id));
+        }
+      }
+    }
+
+    std::vector<array> trace_outputs;
+    trace_outputs.reserve(trace_output_ids.size());
+    for (auto id : trace_output_ids) {
+      trace_outputs.push_back(array_map.at(id));
+    }
+    ftable->insert(
+        std::move(kwarg_keys),
+        std::move(trace_inputs),
+        std::move(trace_outputs),
+        std::move(tape));
+  };
+
+  for (int i = 0; i < function_count; ++i) {
+    import_one();
+  }
+}
+
+ImportedFunction::ImportedFunction(std::shared_ptr<io::Reader> reader)
+    : ftable(std::make_shared<FunctionTable>()) {
+  auto is_ptr = std::move(reader);
+  auto& is = *is_ptr;
+  if (!is.is_open()) {
+    throw std::runtime_error("[import_function] Reader is not open");
   }
 
   // Parse header

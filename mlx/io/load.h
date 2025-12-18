@@ -2,6 +2,7 @@
 
 #pragma once
 
+#include <cstring>
 #include <memory>
 #include <sstream>
 
@@ -104,6 +105,71 @@ class ParallelFileReader : public Reader {
   static ThreadPool& thread_pool();
   int fd_;
   std::string label_;
+};
+
+class BufferReader : public Reader {
+ public:
+  // Takes ownership of the buffer data
+  explicit BufferReader(std::vector<char> buffer)
+      : buffer_(std::make_shared<std::vector<char>>(std::move(buffer))),
+        pos_(0) {}
+
+  // Takes a shared_ptr to existing buffer (for zero-copy when possible)
+  explicit BufferReader(std::shared_ptr<std::vector<char>> buffer)
+      : buffer_(std::move(buffer)), pos_(0) {}
+
+  // Construct from raw pointer and size (copies data)
+  BufferReader(const char* data, size_t size)
+      : buffer_(std::make_shared<std::vector<char>>(data, data + size)),
+        pos_(0) {}
+
+  bool is_open() const override {
+    return buffer_ != nullptr && !buffer_->empty();
+  }
+
+  bool good() const override {
+    return is_open() && pos_ <= buffer_->size();
+  }
+
+  size_t tell() override {
+    return pos_;
+  }
+
+  void seek(int64_t off, std::ios_base::seekdir way = std::ios_base::beg)
+      override {
+    if (way == std::ios_base::beg) {
+      pos_ = static_cast<size_t>(off);
+    } else if (way == std::ios_base::cur) {
+      pos_ += off;
+    } else {
+      pos_ = buffer_->size() + off;
+    }
+  }
+
+  void read(char* data, size_t n) override {
+    if (pos_ + n > buffer_->size()) {
+      throw std::runtime_error(
+          "[BufferReader::read] Attempt to read past end of buffer");
+    }
+    std::memcpy(data, buffer_->data() + pos_, n);
+    pos_ += n;
+  }
+
+  void read(char* data, size_t n, size_t offset) override {
+    if (offset + n > buffer_->size()) {
+      throw std::runtime_error(
+          "[BufferReader::read] Attempt to read past end of buffer");
+    }
+    std::memcpy(data, buffer_->data() + offset, n);
+  }
+
+  std::string label() const override {
+    return "buffer";
+  }
+
+ private:
+  std::shared_ptr<std::vector<char>> buffer_;
+  size_t pos_;
 };
 
 class FileWriter : public Writer {

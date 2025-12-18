@@ -7,6 +7,7 @@
 #include <unordered_map>
 #include <variant>
 #include "mlx/array.h"
+#include "mlx/io/load.h"
 
 namespace mlx::core {
 
@@ -89,6 +90,12 @@ struct ImportedFunction;
  * Import a function from a file.
  */
 ImportedFunction import_function(const std::string& file);
+
+/**
+ * Import a function from a memory buffer.
+ * The buffer must contain the same format as an exported .mlxfn file.
+ */
+ImportedFunction import_function(std::shared_ptr<io::Reader> reader);
 
 /**
  * Make an exporter to export multiple traces of a given function with the same
