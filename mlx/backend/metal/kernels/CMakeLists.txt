@@ -20,12 +20,16 @@ function(build_kernel_base TARGET SRCFILE DEPS)
   if(MLX_METAL_DEBUG)
     set(METAL_FLAGS ${METAL_FLAGS} -gline-tables-only -frecord-sources)
   endif()
-  if(NOT CMAKE_OSX_DEPLOYMENT_TARGET STREQUAL "")
-    set(METAL_FLAGS ${METAL_FLAGS}
-                    "-mmacosx-version-min=${CMAKE_OSX_DEPLOYMENT_TARGET}")
+  if(MLX_METAL_LANGUAGE)
+    set(METAL_FLAGS ${METAL_FLAGS} "-std=${MLX_METAL_LANGUAGE}")
+  elseif(MLX_ENABLE_NAX)
+    set(METAL_FLAGS ${METAL_FLAGS} -Wno-c++20-extensions -std=metal4.0)
+  endif()
+  if(MLX_METAL_TARGET_FLAG)
+    set(METAL_FLAGS ${METAL_FLAGS} "${MLX_METAL_TARGET_FLAG}")
   endif()
   add_custom_command(
-    COMMAND xcrun -sdk macosx metal ${METAL_FLAGS} -c ${SRCFILE}
+    COMMAND xcrun -sdk ${MLX_METAL_SDK} metal ${METAL_FLAGS} -c ${SRCFILE}
             -I${PROJECT_SOURCE_DIR} -o ${TARGET}.air
     DEPENDS ${SRCFILE} ${DEPS} ${BASE_HEADERS}
     OUTPUT ${TARGET}.air
@@ -147,8 +151,8 @@ if(NOT MLX_METAL_JIT)
   build_kernel(gemv_masked steel/utils.h)
   build_kernel(steel/attn/kernels/steel_attention ${STEEL_ATTN_HEADERS})
 
-  if((MLX_METAL_VERSION GREATER_EQUAL 400) AND (MACOS_SDK_VERSION GREATER_EQUAL
-                                                26.2))
+  if((MLX_METAL_VERSION GREATER_EQUAL 400) AND
+     (MLX_ACTIVE_METAL_SDK_VERSION GREATER_EQUAL 26.2))
 
     build_kernel(steel/gemm/kernels/steel_gemm_fused_nax ${STEEL_NAX_HEADERS})
     build_kernel(steel/gemm/kernels/steel_gemm_gather_nax ${STEEL_NAX_HEADERS})
@@ -166,7 +170,7 @@ endif()
 
 add_custom_command(
   OUTPUT ${MLX_METAL_PATH}/mlx.metallib
-  COMMAND xcrun -sdk macosx metallib ${KERNEL_AIR} -o
+  COMMAND xcrun -sdk ${MLX_METAL_SDK} metallib ${KERNEL_AIR} -o
           ${MLX_METAL_PATH}/mlx.metallib
   DEPENDS ${KERNEL_AIR}
   COMMENT "Building mlx.metallib"

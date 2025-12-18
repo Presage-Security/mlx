@@ -45,6 +45,23 @@ option(MLX_METAL_JIT "Use JIT compilation for Metal kernels" OFF)
 option(MLX_USE_CCACHE "Use CCache for compilation cache when available" ON)
 option(BUILD_SHARED_LIBS "Build mlx as a shared library" OFF)
 option(USE_SYSTEM_FMT "Use system's provided fmt library" OFF)
+set(
+  MLX_METAL_LANGUAGE
+  ""
+  CACHE STRING
+        "Override the Metal language version passed to the metal compiler (e.g., metal3.1)"
+)
+set(
+  MLX_METAL_SDK
+  "macosx"
+  CACHE STRING "SDK to pass to xcrun when building Metal kernels (macosx, iphoneos, iphonesimulator)"
+)
+set(
+  MLX_METAL_TARGET_FLAG
+  ""
+  CACHE STRING
+        "Deployment target flag passed to the metal compiler (e.g., -mmacosx-version-min=15.0)"
+)
 
 # --------------------- Processor tests -------------------------
 message(
@@ -52,7 +69,8 @@ message(
     "Building MLX for ${CMAKE_SYSTEM_PROCESSOR} processor on ${CMAKE_SYSTEM_NAME}"
 )
 
-if(${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
+if(${CMAKE_SYSTEM_NAME} MATCHES "Darwin"
+   OR ${CMAKE_SYSTEM_NAME} STREQUAL "iOS")
   if(${CMAKE_SYSTEM_PROCESSOR} MATCHES "x86_64")
     if(NOT MLX_ENABLE_X64_MAC)
       message(
@@ -116,16 +134,16 @@ if(MLX_BUILD_METAL)
 
   # Throw an error if xcrun not found
   execute_process(
-    COMMAND zsh "-c" "/usr/bin/xcrun -sdk macosx --show-sdk-version"
-    OUTPUT_VARIABLE MACOS_SDK_VERSION
+    COMMAND zsh "-c" "/usr/bin/xcrun -sdk ${MLX_METAL_SDK} --show-sdk-version"
+    OUTPUT_VARIABLE MLX_ACTIVE_METAL_SDK_VERSION
     OUTPUT_STRIP_TRAILING_WHITESPACE COMMAND_ERROR_IS_FATAL ANY)
 
-  if(${MACOS_SDK_VERSION} LESS 14.0)
+  if(${MLX_ACTIVE_METAL_SDK_VERSION} LESS 14.0)
     message(
       FATAL_ERROR
         "MLX requires macOS SDK >= 14.0 to be built with MLX_BUILD_METAL=ON")
   endif()
-  message(STATUS "Building with macOS SDK version ${MACOS_SDK_VERSION}")
+  message(STATUS "Building with Metal SDK ${MLX_METAL_SDK} version ${MLX_ACTIVE_METAL_SDK_VERSION}")
 
   set(METAL_CPP_URL
       https://developer.apple.com/metal/cpp/files/metal-cpp_26.zip)
@@ -134,12 +152,29 @@ if(MLX_BUILD_METAL)
     if(${CMAKE_OSX_DEPLOYMENT_TARGET} LESS 14.0)
       message(FATAL_ERROR "MLX requires macOS >= 14.0")
     endif()
-    set(XCRUN_FLAGS "-mmacosx-version-min=${CMAKE_OSX_DEPLOYMENT_TARGET}")
+    if(NOT MLX_METAL_TARGET_FLAG)
+      if(${CMAKE_SYSTEM_NAME} STREQUAL "iOS"
+         OR MLX_METAL_SDK MATCHES "iphone")
+        set(_mlx_target_flag "-mios-version-min=${CMAKE_OSX_DEPLOYMENT_TARGET}")
+      else()
+        set(_mlx_target_flag "-mmacosx-version-min=${CMAKE_OSX_DEPLOYMENT_TARGET}")
+      endif()
+      set(
+        MLX_METAL_TARGET_FLAG
+        "${_mlx_target_flag}"
+        CACHE STRING
+              "Deployment target flag passed to the metal compiler (e.g., -mmacosx-version-min=15.0)"
+        FORCE)
+    endif()
+  endif()
+  set(XCRUN_FLAGS "")
+  if(MLX_METAL_TARGET_FLAG)
+    set(XCRUN_FLAGS "${MLX_METAL_TARGET_FLAG}")
   endif()
   execute_process(
     COMMAND
       zsh "-c"
-      "echo \"__METAL_VERSION__\" | xcrun -sdk macosx metal ${XCRUN_FLAGS} -E -x metal -P - | tail -1 | tr -d '\n'"
+      "echo \"__METAL_VERSION__\" | xcrun -sdk ${MLX_METAL_SDK} metal ${XCRUN_FLAGS} -E -x metal -P - | tail -1 | tr -d '\n'"
     OUTPUT_VARIABLE MLX_METAL_VERSION COMMAND_ERROR_IS_FATAL ANY)
   FetchContent_Declare(metal_cpp URL ${METAL_CPP_URL})
   FetchContent_MakeAvailable(metal_cpp)
