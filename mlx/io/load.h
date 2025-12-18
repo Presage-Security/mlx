@@ -5,6 +5,8 @@
 #include <cstring>
 #include <memory>
 #include <sstream>
+#include <stdexcept>
+#include <vector>
 
 #include <fcntl.h>
 #ifdef _MSC_VER
